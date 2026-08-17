@@ -31,5 +31,9 @@ class WorkerRequest(BaseModel):
     worker_id: str
 
 
-class CompleteStepRequest(WorkerRequest):
+class ClaimCredentials(WorkerRequest):
+    claim_token: str
+
+
+class CompleteStepRequest(ClaimCredentials):
     success: bool

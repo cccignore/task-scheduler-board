@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from .db import database_path as resolve_database_path
 from .db import initialize_database
 from .schemas import (
+    ClaimCredentials,
     CompleteStepRequest,
     GroupCreate,
     GroupUpdate,
@@ -130,12 +131,18 @@ def create_app(database_path: Optional[PathLike] = None) -> FastAPI:
 
     @application.post("/api/workers/claim-next")
     def workers_claim_next(body: WorkerRequest) -> Dict[str, Any]:
-        return {"task": claim_next_task(selected_database, body.worker_id)}
+        claim = claim_next_task(selected_database, body.worker_id)
+        return claim or {"task": None, "claim_token": None}
 
     @application.post("/api/tasks/{task_id}/start")
-    def tasks_start(task_id: int, body: WorkerRequest) -> Dict[str, Any]:
+    def tasks_start(task_id: int, body: ClaimCredentials) -> Dict[str, Any]:
         return {
-            "task": start_task(selected_database, task_id, worker_id=body.worker_id)
+            "task": start_task(
+                selected_database,
+                task_id,
+                worker_id=body.worker_id,
+                claim_token=body.claim_token,
+            )
         }
 
     @application.post("/api/tasks/{task_id}/steps/{sequence}/complete")
@@ -149,6 +156,7 @@ def create_app(database_path: Optional[PathLike] = None) -> FastAPI:
             task_id=task_id,
             sequence=sequence,
             worker_id=body.worker_id,
+            claim_token=body.claim_token,
             success=body.success,
         )
 

@@ -42,16 +42,20 @@ def create_task(
     return payload["task"]
 
 
-def claim_task(client, worker_id: str) -> Optional[dict]:
+def claim_task(client, worker_id: str) -> dict:
     payload = assert_success(
         client.post("/api/workers/claim-next", json={"worker_id": worker_id})
     )
-    return payload["task"]
+    assert (payload["task"] is None) == (payload["claim_token"] is None)
+    return payload
 
 
-def start_task(client, task_id: int, worker_id: str) -> dict:
+def start_task(client, task_id: int, worker_id: str, claim_token: str) -> dict:
     payload = assert_success(
-        client.post(f"/api/tasks/{task_id}/start", json={"worker_id": worker_id})
+        client.post(
+            f"/api/tasks/{task_id}/start",
+            json={"worker_id": worker_id, "claim_token": claim_token},
+        )
     )
     return payload["task"]
 
@@ -61,12 +65,17 @@ def complete_step(
     task_id: int,
     sequence: int,
     worker_id: str,
+    claim_token: str,
     success: bool,
 ) -> dict:
     payload = assert_success(
         client.post(
             f"/api/tasks/{task_id}/steps/{sequence}/complete",
-            json={"worker_id": worker_id, "success": success},
+            json={
+                "worker_id": worker_id,
+                "claim_token": claim_token,
+                "success": success,
+            },
         )
     )
     return payload["task"]

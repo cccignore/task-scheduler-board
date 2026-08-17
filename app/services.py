@@ -2,6 +2,7 @@
 
 import copy
 import json
+import secrets
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -350,10 +351,17 @@ def create_task(
 def list_tasks(db_path: DatabasePath) -> List[JsonObject]:
     connection = connect(db_path)
     try:
+        connection.execute("BEGIN")
         ids = connection.execute(
             "SELECT id FROM tasks ORDER BY created_at DESC, id DESC"
         ).fetchall()
-        return [_task_from_connection(connection, row["id"]) for row in ids]
+        tasks = [_task_from_connection(connection, row["id"]) for row in ids]
+        connection.commit()
+        return tasks
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
     finally:
         connection.close()
 
@@ -361,48 +369,8 @@ def list_tasks(db_path: DatabasePath) -> List[JsonObject]:
 def get_task(db_path: DatabasePath, task_id: int) -> JsonObject:
     connection = connect(db_path)
     try:
-        return _task_from_connection(connection, task_id)
-    finally:
-        connection.close()
-
-
-def claim_next_task(db_path: DatabasePath, worker_id: str) -> Optional[JsonObject]:
-    """Atomically claim the oldest pending task for exactly one worker."""
-
-    worker_id = worker_id.strip()
-    if not worker_id:
-        raise ValidationError("worker_id must not be blank")
-    connection = connect(db_path)
-    try:
-        # SQLite permits only one writer.  Acquiring that right before the
-        # SELECT removes the otherwise unsafe read/update race between workers.
-        connection.execute("BEGIN IMMEDIATE")
-        row = connection.execute(
-            """
-            SELECT id FROM tasks
-            WHERE status = 'pending' AND claimed_by IS NULL
-            ORDER BY created_at, id
-            LIMIT 1
-            """
-        ).fetchone()
-        if row is None:
-            connection.commit()
-            return None
-
-        now = utc_now()
-        cursor = connection.execute(
-            """
-            UPDATE tasks
-            SET status = 'claimed', claimed_by = ?, claimed_at = ?, updated_at = ?
-            WHERE id = ? AND status = 'pending' AND claimed_by IS NULL
-            """,
-            (worker_id, now, now, row["id"]),
-        )
-        if cursor.rowcount != 1:
-            # The condition is a second invariant even though BEGIN IMMEDIATE
-            # already serializes SQLite writers.
-            raise ConflictError("the selected task was claimed concurrently")
-        task = _task_from_connection(connection, row["id"])
+        connection.execute("BEGIN")
+        task = _task_from_connection(connection, task_id)
         connection.commit()
         return task
     except Exception:
@@ -413,12 +381,77 @@ def claim_next_task(db_path: DatabasePath, worker_id: str) -> Optional[JsonObjec
         connection.close()
 
 
-def start_task(db_path: DatabasePath, task_id: int, worker_id: str) -> JsonObject:
-    """Snapshot the current L2 override and all resolved step parameters once."""
+def claim_next_task(
+    db_path: DatabasePath,
+    worker_id: str,
+    *,
+    connection: Optional[sqlite3.Connection] = None,
+) -> Optional[JsonObject]:
+    """Atomically claim the oldest task and return its server-issued token."""
 
     worker_id = worker_id.strip()
     if not worker_id:
         raise ValidationError("worker_id must not be blank")
+    owns_connection = connection is None
+    connection = connection or connect(db_path)
+    try:
+        # SQLite permits only one writer.  Acquiring that right before the
+        # SELECT removes the otherwise unsafe read/update race between workers.
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            """
+            SELECT id FROM tasks
+            WHERE status = 'pending' AND claimed_by IS NULL AND claim_token IS NULL
+            ORDER BY created_at, id
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            connection.commit()
+            return None
+
+        now = utc_now()
+        claim_token = secrets.token_urlsafe(32)
+        cursor = connection.execute(
+            """
+            UPDATE tasks
+            SET status = 'claimed', claimed_by = ?, claim_token = ?,
+                claimed_at = ?, updated_at = ?
+            WHERE id = ? AND status = 'pending'
+                AND claimed_by IS NULL AND claim_token IS NULL
+            """,
+            (worker_id, claim_token, now, now, row["id"]),
+        )
+        if cursor.rowcount != 1:
+            # The condition is a second invariant even though BEGIN IMMEDIATE
+            # already serializes SQLite writers.
+            raise ConflictError("the selected task was claimed concurrently")
+        task = _task_from_connection(connection, row["id"])
+        connection.commit()
+        return {"task": task, "claim_token": claim_token}
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        if owns_connection:
+            connection.close()
+
+
+def start_task(
+    db_path: DatabasePath,
+    task_id: int,
+    worker_id: str,
+    claim_token: str,
+) -> JsonObject:
+    """Snapshot the current L2 override and all resolved step parameters once."""
+
+    worker_id = worker_id.strip()
+    claim_token = claim_token.strip()
+    if not worker_id:
+        raise ValidationError("worker_id must not be blank")
+    if not claim_token:
+        raise ValidationError("claim_token must not be blank")
     connection = connect(db_path)
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -427,10 +460,9 @@ def start_task(db_path: DatabasePath, task_id: int, worker_id: str) -> JsonObjec
         ).fetchone()
         if task is None:
             raise NotFoundError("task {} was not found".format(task_id))
-        if task["claimed_by"] != worker_id:
-            raise ConflictError(
-                "task {} is held by a different worker".format(task_id)
-            )
+        token_matches = secrets.compare_digest(task["claim_token"] or "", claim_token)
+        if task["claimed_by"] != worker_id or not token_matches:
+            raise ConflictError("claim credentials do not match task {}".format(task_id))
         if task["status"] == "running":
             # A retry by the owning worker must not re-read a changed group.
             result = _task_from_connection(connection, task_id)
@@ -486,9 +518,17 @@ def start_task(db_path: DatabasePath, task_id: int, worker_id: str) -> JsonObjec
             UPDATE tasks
             SET status = 'running', group_parameters_snapshot = ?,
                 started_at = ?, updated_at = ?
-            WHERE id = ? AND status = 'claimed' AND claimed_by = ?
+            WHERE id = ? AND status = 'claimed'
+                AND claimed_by = ? AND claim_token = ?
             """,
-            (_json_dump(group_parameters), now, now, task_id, worker_id),
+            (
+                _json_dump(group_parameters),
+                now,
+                now,
+                task_id,
+                worker_id,
+                claim_token,
+            ),
         )
         result = _task_from_connection(connection, task_id)
         connection.commit()
@@ -506,14 +546,21 @@ def complete_step(
     task_id: int,
     sequence: int,
     worker_id: str,
+    claim_token: str,
     success: bool,
+    *,
+    connection: Optional[sqlite3.Connection] = None,
 ) -> JsonObject:
     """Record a step result with first-write-wins idempotency."""
 
     worker_id = worker_id.strip()
+    claim_token = claim_token.strip()
     if not worker_id:
         raise ValidationError("worker_id must not be blank")
-    connection = connect(db_path)
+    if not claim_token:
+        raise ValidationError("claim_token must not be blank")
+    owns_connection = connection is None
+    connection = connection or connect(db_path)
     try:
         connection.execute("BEGIN IMMEDIATE")
         task = connection.execute(
@@ -521,10 +568,9 @@ def complete_step(
         ).fetchone()
         if task is None:
             raise NotFoundError("task {} was not found".format(task_id))
-        if task["claimed_by"] != worker_id:
-            raise ConflictError(
-                "task {} is held by a different worker".format(task_id)
-            )
+        token_matches = secrets.compare_digest(task["claim_token"] or "", claim_token)
+        if task["claimed_by"] != worker_id or not token_matches:
+            raise ConflictError("claim credentials do not match task {}".format(task_id))
         step = connection.execute(
             "SELECT * FROM steps WHERE task_id = ? AND sequence = ?",
             (task_id, sequence),
@@ -650,7 +696,8 @@ def complete_step(
             connection.rollback()
         raise
     finally:
-        connection.close()
+        if owns_connection:
+            connection.close()
 
 
 def seed_demo(db_path: DatabasePath) -> JsonObject:
@@ -701,14 +748,16 @@ def seed_demo(db_path: DatabasePath) -> JsonObject:
     try:
         connection.execute("BEGIN IMMEDIATE")
         now = utc_now()
+        claim_token = secrets.token_urlsafe(32)
         claimed = connection.execute(
             """
             UPDATE tasks
-            SET status = 'claimed', claimed_by = 'demo-worker',
+            SET status = 'claimed', claimed_by = 'demo-worker', claim_token = ?,
                 claimed_at = ?, updated_at = ?
-            WHERE id = ? AND status = 'pending' AND claimed_by IS NULL
+            WHERE id = ? AND status = 'pending'
+                AND claimed_by IS NULL AND claim_token IS NULL
             """,
-            (now, now, running["id"]),
+            (claim_token, now, now, running["id"]),
         )
         if claimed.rowcount != 1:
             raise ConflictError("demo seed could not claim its running task")
@@ -719,5 +768,10 @@ def seed_demo(db_path: DatabasePath) -> JsonObject:
         raise
     finally:
         connection.close()
-    running = start_task(db_path, running["id"], "demo-worker")
-    return {"group": demo_group, "running_task": running, "pending_task": pending}
+    running = start_task(db_path, running["id"], "demo-worker", claim_token)
+    return {
+        "group": demo_group,
+        "running_task": running,
+        "pending_task": pending,
+        "claim_token": claim_token,
+    }

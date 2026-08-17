@@ -11,6 +11,7 @@
   const POLL_MS = 1500;
   const REQUEST_TIMEOUT_MS = 10000;
   const WORKER_KEY = "task-board-worker-id";
+  const CLAIM_TOKEN_PREFIX = "task-board-claim-token:";
   const STATUSES = ["pending", "claimed", "running", "done", "failed"];
 
   const dom = {
@@ -111,6 +112,27 @@
     }
     saveWorkerId();
     return workerId;
+  }
+
+  function saveClaimToken(taskId, claimToken) {
+    try {
+      sessionStorage.setItem(`${CLAIM_TOKEN_PREFIX}${taskId}`, claimToken);
+    } catch (_error) {
+      throw new Error("任务已认领，但当前标签页无法保存执行凭证，请允许使用 sessionStorage");
+    }
+  }
+
+  function taskCredentials(taskId) {
+    let claimToken = null;
+    try {
+      claimToken = sessionStorage.getItem(`${CLAIM_TOKEN_PREFIX}${taskId}`);
+    } catch (_error) {
+      throw new Error("当前标签页无法读取任务执行凭证，请允许使用 sessionStorage");
+    }
+    if (!claimToken) {
+      throw new Error(`当前标签页没有任务 ${taskId} 的认领凭证，请在本页重新认领或创建演示任务`);
+    }
+    return { worker_id: currentWorkerId(), claim_token: claimToken };
   }
 
   async function request(path, method = "GET", body = null) {
@@ -408,13 +430,13 @@
     if (busyAction) return;
     busyAction = key;
     syncButtons();
-    showVerification("正在并发上报", "五个相同请求已经同时发出");
     try {
-      const workerId = currentWorkerId();
+      const credentials = taskCredentials(taskId);
+      showVerification("正在并发上报", "五个相同请求已经同时发出");
       const requests = Array.from({ length: 5 }, () => request(
         API.complete(taskId, sequence),
         "POST",
-        { worker_id: workerId, success: true },
+        { ...credentials, success: true },
       ));
       const settled = await Promise.allSettled(requests);
       const fulfilled = settled.filter((result) => result.status === "fulfilled").length;
@@ -451,6 +473,7 @@
       "create",
       () => request(API.demo, "POST"),
       (payload) => {
+        saveClaimToken(payload.task.id, payload.claim_token);
         dom.workerId.value = payload.task.claimed_by;
         saveWorkerId();
         return `演示任务 ${payload.task.id} 已创建，Worker 已切换为 ${payload.task.claimed_by}`;
@@ -461,7 +484,11 @@
     runAction(
       "claim",
       () => request(API.claim, "POST", { worker_id: currentWorkerId() }),
-      (payload) => payload.task ? `已认领任务 ${payload.task.id}` : "当前没有可认领的任务",
+      (payload) => {
+        if (!payload.task) return "当前没有可认领的任务";
+        saveClaimToken(payload.task.id, payload.claim_token);
+        return `已认领任务 ${payload.task.id}`;
+      },
     );
   });
 
@@ -476,7 +503,7 @@
       const taskId = Number(button.dataset.taskId);
       runAction(
         `start-${taskId}`,
-        () => request(API.start(taskId), "POST", { worker_id: currentWorkerId() }),
+        () => request(API.start(taskId), "POST", taskCredentials(taskId)),
         () => `任务 ${taskId} 已启动`,
       );
     } else if (button.dataset.action === "complete") {

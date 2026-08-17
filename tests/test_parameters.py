@@ -109,8 +109,8 @@ def test_complete_parameter_merge_boundary_matrix(client):
     )
 
     claimed = claim_task(client, "parameter-worker")
-    assert claimed["id"] == task["id"]
-    start_task(client, task["id"], "parameter-worker")
+    assert claimed["task"]["id"] == task["id"]
+    start_task(client, task["id"], "parameter-worker", claimed["claim_token"])
     resolved = _resolved(get_task(client, task["id"]))
 
     initial = {
@@ -150,8 +150,8 @@ def test_no_group_and_empty_dictionaries(client):
         ],
         base_parameters={"kept": "base"},
     )
-    claim_task(client, "solo")
-    start_task(client, task["id"], "solo")
+    claimed = claim_task(client, "solo")
+    start_task(client, task["id"], "solo", claimed["claim_token"])
 
     assert _resolved(get_task(client, task["id"])) == [
         {"kept": "base"},
@@ -177,8 +177,9 @@ def test_group_override_is_snapshotted_exactly_at_start(client):
         group["id"],
         overrides={"value": "at-start", "before_start": "visible"},
     )
-    claim_task(client, "snapshot-worker")
-    start_task(client, task["id"], "snapshot-worker")
+    claimed = claim_task(client, "snapshot-worker")
+    claim_token = claimed["claim_token"]
+    start_task(client, task["id"], "snapshot-worker", claim_token)
     update_group(
         client,
         group["id"],
@@ -186,7 +187,7 @@ def test_group_override_is_snapshotted_exactly_at_start(client):
     )
     # An owning worker may retry start; that retry must reuse the stored
     # snapshot instead of reading the now-modified group.
-    start_task(client, task["id"], "snapshot-worker")
+    start_task(client, task["id"], "snapshot-worker", claim_token)
 
     expected = {
         "value": "at-start",

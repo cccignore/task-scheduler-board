@@ -34,14 +34,15 @@ CREATE TABLE IF NOT EXISTS tasks (
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'claimed', 'running', 'done', 'failed')),
     claimed_by TEXT,
+    claim_token TEXT,
     claimed_at TEXT,
     started_at TEXT,
     completed_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     CHECK (
-        (status = 'pending' AND claimed_by IS NULL)
-        OR (status <> 'pending' AND claimed_by IS NOT NULL)
+        (status = 'pending' AND claimed_by IS NULL AND claim_token IS NULL)
+        OR (status <> 'pending' AND claimed_by IS NOT NULL AND claim_token IS NOT NULL)
     )
 );
 

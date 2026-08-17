@@ -1,4 +1,5 @@
 import threading
+from datetime import datetime
 
 from app import services
 
@@ -96,14 +97,21 @@ def test_success_state_machine_order_and_idempotent_retry(client):
     assert after_first["status"] == "running"
     assert [step["status"] for step in after_first["steps"]] == ["done", "running"]
     assert len(_logs(after_first)) == 1
-    assert _logs(after_first)[0]["success"] is True
+    canonical_log = _logs(after_first)[0]
+    assert canonical_log["task_id"] == task["id"]
+    assert canonical_log["step_sequence"] == 1
+    assert canonical_log["success"] is True
+    completed_at = datetime.fromisoformat(
+        canonical_log["completed_at"].replace("Z", "+00:00")
+    )
+    assert completed_at.utcoffset() is not None
 
     # A late contradictory retry is a successful no-op, not a destructive update.
     complete_step(client, task["id"], 1, "worker-a", claim_token, False)
     after_retry = get_task(client, task["id"])
     assert [step["status"] for step in after_retry["steps"]] == ["done", "running"]
     assert len(_logs(after_retry)) == 1
-    assert _logs(after_retry)[0]["success"] is True
+    assert _logs(after_retry)[0] == canonical_log
 
     complete_step(client, task["id"], 2, "worker-a", claim_token, True)
     done = get_task(client, task["id"])
@@ -117,9 +125,10 @@ def test_failed_step_terminates_task(client):
         client,
         "state-machine-failure",
         [
-            {"name": "will-fail", "overrides": {}},
-            {"name": "must-not-start", "overrides": {}},
+            {"name": "will-fail", "overrides": {"stage": "failed-step"}},
+            {"name": "must-not-start", "overrides": {"stage": "future-step"}},
         ],
+        base_parameters={"stage": "base"},
     )
     claim = claim_task(client, "failure-worker")
     claim_token = claim["claim_token"]
@@ -134,6 +143,7 @@ def test_failed_step_terminates_task(client):
     assert [step["status"] for step in failed["steps"]] == ["failed", "pending"]
     assert len(_logs(failed)) == 1
     assert _logs(failed)[0]["success"] is False
+    assert failed["resolved_parameters"] == {"stage": "failed-step"}
 
 
 def test_task_detail_is_one_consistent_read_snapshot(

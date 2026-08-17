@@ -45,6 +45,37 @@ def test_pure_chain_returns_independent_snapshots_and_keeps_json_falsy_values():
     assert "brand_new_blank" not in snapshots[0]
 
 
+def test_only_exact_empty_string_skips_and_nested_snapshots_are_deep_copies():
+    snapshots = resolve_parameter_chain(
+        {
+            "object": {"old": True},
+            "array": ["old"],
+            "space": "old",
+        },
+        {},
+        [
+            {"object": {}, "array": [], "space": " "},
+            {
+                "object": {"nested": {"value": 1}},
+                "array": [{"value": 1}],
+            },
+            {},
+        ],
+    )
+
+    assert snapshots[0] == {"object": {}, "array": [], "space": " "}
+    assert snapshots[1] == snapshots[2] == {
+        "object": {"nested": {"value": 1}},
+        "array": [{"value": 1}],
+        "space": " ",
+    }
+
+    snapshots[2]["object"]["nested"]["value"] = 2
+    snapshots[2]["array"][0]["value"] = 2
+    assert snapshots[1]["object"]["nested"]["value"] == 1
+    assert snapshots[1]["array"][0]["value"] == 1
+
+
 def test_complete_parameter_merge_boundary_matrix(client):
     group = create_group(
         client,

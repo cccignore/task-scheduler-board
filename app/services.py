@@ -161,7 +161,10 @@ def _task_from_connection(connection: sqlite3.Connection, task_id: int) -> JsonO
         resolved_parameters = current_step["resolved_parameters"]
     else:
         for step in reversed(steps):
-            if step["resolved_parameters"] is not None:
+            if (
+                step["status"] in ("done", "failed")
+                and step["resolved_parameters"] is not None
+            ):
                 resolved_parameters = step["resolved_parameters"]
                 break
 

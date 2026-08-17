@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="任务调度系统实时状态与幂等验证看板">
+    <meta name="theme-color" content="#17251f">
+    <title>任务调度台</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <header class="masthead">
+      <div class="topbar">
+        <a class="wordmark" href="#main-content">KAPI<span>.</span>OPS</a>
+        <div id="connectionStatus" class="connection connection--loading" role="status" aria-live="polite">
+          <span class="connection__dot" aria-hidden="true"></span>
+          <span id="connectionText">正在连接</span>
+        </div>
+      </div>
+
+      <div class="hero">
+        <div>
+          <p class="eyebrow">Operations / Task Dispatch</p>
+          <h1>任务调度台</h1>
+          <p class="hero__lede">查看认领、执行与日志写入；任务数据每 1.5 秒自动刷新。</p>
+        </div>
+
+        <section class="operator" aria-labelledby="operator-title">
+          <div>
+            <p class="operator__kicker">当前操作者</p>
+            <h2 id="operator-title">Worker 控制台</h2>
+          </div>
+          <label class="field" for="workerId">
+            <span>Worker ID</span>
+            <input id="workerId" type="text" maxlength="64" autocomplete="off" spellcheck="false">
+          </label>
+          <div class="operator__actions">
+            <button id="createDemoButton" class="button button--dark" type="button" data-operation-key="create">
+              一键创建演示任务
+            </button>
+            <button id="claimButton" class="button button--light" type="button" data-operation-key="claim">
+              认领下一个任务
+            </button>
+          </div>
+        </section>
+      </div>
+    </header>
+
+    <main id="main-content" class="page-shell" tabindex="-1">
+      <section aria-labelledby="overview-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow eyebrow--green">System snapshot</p>
+            <h2 id="overview-title">状态概览</h2>
+          </div>
+          <p id="lastUpdated" class="timestamp">等待首次同步</p>
+        </div>
+        <div id="statusSummary" class="status-summary"></div>
+      </section>
+
+      <section class="board" aria-labelledby="board-title">
+        <div class="board__header">
+          <div>
+            <p class="eyebrow eyebrow--green">Live task queue</p>
+            <h2 id="board-title">全部任务</h2>
+          </div>
+          <button id="refreshButton" class="button button--outline" type="button" data-operation-key="refresh">
+            立即刷新
+          </button>
+        </div>
+        <div id="globalMessage" class="notice" role="status" aria-live="polite" hidden></div>
+        <div id="taskList" class="task-list" aria-busy="true"></div>
+      </section>
+
+      <section class="verification" aria-labelledby="verification-title">
+        <div>
+          <p class="eyebrow">Idempotency demo</p>
+          <h2 id="verification-title">并发幂等验证</h2>
+          <p>在 running 步骤点击“并发完成 ×5”，页面会同时发送五个相同请求，再读取实际日志条数。</p>
+        </div>
+        <div id="verificationResult" class="verification__result" role="status" aria-live="polite">
+          <strong>等待验证</strong>
+          <span>尚未发起重复完成上报</span>
+        </div>
+      </section>
+    </main>
+
+    <noscript><div class="noscript">此看板需要启用 JavaScript。</div></noscript>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

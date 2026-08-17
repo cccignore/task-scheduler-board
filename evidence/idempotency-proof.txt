@@ -4,12 +4,19 @@ Command: .venv/bin/python scripts/run_idempotency_proof.py
 
 REAL MULTIPROCESS IDEMPOTENCY PROOF: PASS
   start method                  : spawn
-  simultaneous processes       : 5
-  inserted responses            : 1
-  duplicate/no-op responses     : 4
+  worker processes              : 5
+  unique ready process ids      : 5
+  verified pre-open connections : 5
+  ready pid/connection records  : 23213/4465349136, 23214/4465054224, 23215/4433220112, 23216/4463727120, 23217/4420489744
+  observed completion calls     : 5
+  observed result records       : 5
+  exact inserted responses      : 1
+  exact duplicate/no-op responses: 4
+  invalid response pairs        : 0
   log rows after five reports   : 1
   stored result is success      : True
   later failed retry is no-op   : True
-  original log remained bytewise: True
+  original log row unchanged    : True
+  failure-first retry is no-op  : True
   final task status             : done
-  child errors                  : 0
+  child/cleanup errors          : 0

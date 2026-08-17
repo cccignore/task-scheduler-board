@@ -3,13 +3,19 @@ Environment: Python 3.9.6; SQLite 3.54.0; macOS arm64
 Command: .venv/bin/python scripts/run_concurrency_proof.py
 
 REAL MULTIPROCESS CLAIM PROOF: PASS
-  start method              : spawn
-  worker processes          : 8
-  one-task race rounds      : 40
-  independent claim calls   : 320
-  expected unique winners   : 40
-  actual unique winners     : 40
-  duplicate claims          : 0
-  missing/extra winner rounds: 0
-  child errors              : 0
-  pending tasks after proof : 0
+  start method                 : spawn
+  worker processes             : 8
+  unique ready process ids     : 8
+  verified pre-open connections: 8
+  ready pid/connection records : 23203/4393730576, 23204/4460216848, 23205/4452319760, 23206/4456923664, 23207/4427186704, 23208/4422681104, 23209/4457497104, 23210/4463133200
+  one-task race rounds         : 40
+  observed claim calls         : 320
+  observed result records      : 320
+  result pair anomalies        : 0
+  expected unique winners      : 40
+  actual unique winners        : 40
+  duplicate claims             : 0
+  missing/extra winner rounds  : 0
+  claim metadata anomalies     : 0
+  child/cleanup errors         : 0
+  pending tasks after proof    : 0

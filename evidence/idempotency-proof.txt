@@ -1,0 +1,15 @@
+Captured: 2026-08-17 (Asia/Shanghai)
+Environment: Python 3.9.6; SQLite 3.54.0; macOS arm64
+Command: .venv/bin/python scripts/run_idempotency_proof.py
+
+REAL MULTIPROCESS IDEMPOTENCY PROOF: PASS
+  start method                  : spawn
+  simultaneous processes       : 5
+  inserted responses            : 1
+  duplicate/no-op responses     : 4
+  log rows after five reports   : 1
+  stored result is success      : True
+  later failed retry is no-op   : True
+  original log remained bytewise: True
+  final task status             : done
+  child errors                  : 0

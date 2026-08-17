@@ -1,0 +1,15 @@
+Captured: 2026-08-17 (Asia/Shanghai)
+Environment: Python 3.9.6; SQLite 3.54.0; macOS arm64
+Command: .venv/bin/python scripts/run_concurrency_proof.py
+
+REAL MULTIPROCESS CLAIM PROOF: PASS
+  start method              : spawn
+  worker processes          : 8
+  one-task race rounds      : 40
+  independent claim calls   : 320
+  expected unique winners   : 40
+  actual unique winners     : 40
+  duplicate claims          : 0
+  missing/extra winner rounds: 0
+  child errors              : 0
+  pending tasks after proof : 0

@@ -1,8 +1,8 @@
 # 任务调度看板
 
-一个可本地运行的 FastAPI + SQLite 小型调度器：后端提供任务/组/Step API 与静态看板；每次数据库操作使用独立连接。参数解析在任务进入 `running` 时冻结组参数快照，然后按 `base → group snapshot → 有序 step override` 做浅层 key 合并；L3 中精确等于 `""` 的值不写入当前值，其余值（含 `0`、`false`、`null` 和新 key）会粘性传给后续 Step。
+一个可本地运行的 FastAPI + SQLite 小型调度器：后端提供任务/组/Step API 与静态看板；每次数据库操作使用独立连接。参数解析在任务进入 `running` 时冻结组参数快照，然后按 `base → group snapshot → 有序 step override` 做浅层 key 合并；L3 中精确等于 `""` 的值不写入当前值，其余值（含 `0`、`false`、`null` 和新 key）会粘性传给后续 Step。认领成功时由数据库事务绑定一个服务端随机 token，后续 start/complete 必须同时提供 Worker ID 与 token；任务列表不暴露 token。
 
-实际开发耗时：本次 Codex 辅助实现与自动验证约 30 分钟；两名成员的人工审阅、修改和答辩准备耗时在 `COLLAB.md` 中分别如实记录。
+实际开发耗时：本次 Codex 辅助实现、对抗审阅与自动验证约 1 小时；两名成员的人工审阅、修改和答辩准备耗时须在提交前于 `COLLAB.md` 中分别如实补录。
 
 ## 为什么是 Python，正确性如何保证
 
@@ -16,7 +16,7 @@ SQLite 认领在短事务中取得写锁，再以 `status = 'pending'` 为条件
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-python3 -m pip install -e '.[dev]'
+python3 -m pip install '.[dev]'
 uvicorn app.main:app --reload                    # http://127.0.0.1:8000
 python3 -m pytest                                # 全部单元/API/多进程测试
 python3 scripts/run_concurrency_proof.py         # 真实并发认领证据

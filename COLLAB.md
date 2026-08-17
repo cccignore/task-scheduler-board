@@ -23,7 +23,7 @@
 两名成员应阅读各自负责部分及关键跨模块变更，并至少由一人在干净环境中亲自执行：
 
 ```bash
-python3 -m pip install -e '.[dev]'
+python3 -m pip install '.[dev]'
 python3 -m pytest
 python3 scripts/run_concurrency_proof.py
 python3 scripts/run_idempotency_proof.py

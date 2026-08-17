@@ -2,7 +2,7 @@
 
 一个可本地运行的 FastAPI + SQLite 小型调度器：后端提供任务/组/Step API 与静态看板；每次数据库操作使用独立连接。参数解析在任务进入 `running` 时冻结组参数快照，然后按 `base → group snapshot → 有序 step override` 做浅层 key 合并；L3 中精确等于 `""` 的值不写入当前值，其余值（含 `0`、`false`、`null` 和新 key）会粘性传给后续 Step。认领成功时由数据库事务绑定一个服务端随机 token，后续 start/complete 必须同时提供 Worker ID 与 token；任务列表不暴露 token。
 
-实际开发耗时：本次 Codex 辅助实现、对抗审阅与自动验证约 1 小时；两名成员的人工审阅、修改和答辩准备耗时须在提交前于 `COLLAB.md` 中分别如实补录。
+实际开发耗时：本次 Codex 辅助实现、对抗审阅与自动验证约 1 小时。实际为单人队伍，没有第二名人工成员；人工复核耗时未单独计时，完整披露见 `COLLAB.md`。
 
 ## 为什么是 Python，正确性如何保证
 

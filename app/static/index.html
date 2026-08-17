@@ -26,6 +26,11 @@
           <p class="eyebrow">Operations / Task Dispatch</p>
           <h1>任务调度台</h1>
           <p class="hero__lede">查看认领、执行与日志写入；任务数据每 1.5 秒自动刷新。</p>
+          <ol class="demo-guide" aria-label="现场演示三步">
+            <li><span>1</span><strong>创建</strong><small>点击“一键创建演示任务”</small></li>
+            <li><span>2</span><strong>并发上报</strong><small>在执行中 Step 点“并发完成 ×5”</small></li>
+            <li><span>3</span><strong>核对</strong><small>看 1 次写入、4 次 no-op 与 DB 1 条日志</small></li>
+          </ol>
         </div>
 
         <section class="operator" aria-labelledby="operator-title">
@@ -37,6 +42,7 @@
             <span>Worker ID</span>
             <input id="workerId" type="text" maxlength="64" autocomplete="off" spellcheck="false">
           </label>
+          <p class="operator__note">认领成功后，claim token 会自动保存在当前标签页，用于后续启动和完成校验；页面不会展示凭证原文。</p>
           <div class="operator__actions">
             <button id="createDemoButton" class="button button--dark" type="button" data-operation-key="create">
               一键创建演示任务

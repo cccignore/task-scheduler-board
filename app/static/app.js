@@ -13,6 +13,13 @@
   const WORKER_KEY = "task-board-worker-id";
   const CLAIM_TOKEN_PREFIX = "task-board-claim-token:";
   const STATUSES = ["pending", "claimed", "running", "done", "failed"];
+  const STATUS_COPY = Object.freeze({
+    pending: { label: "待认领", meaning: "等待 Worker" },
+    claimed: { label: "已认领", meaning: "等待启动" },
+    running: { label: "执行中", meaning: "当前 Step 可上报" },
+    done: { label: "已完成", meaning: "全部 Step 成功" },
+    failed: { label: "已失败", meaning: "任一 Step 失败后终止" },
+  });
 
   const dom = {
     connection: document.querySelector("#connectionStatus"),
@@ -59,10 +66,40 @@
     return list;
   }
 
-  function inlineParameters(parameters) {
-    const entries = Object.entries(parameters);
-    if (!entries.length) return "无";
-    return entries.map(([key, value]) => `${key}=${valueText(value)}`).join(" · ");
+  function statusText(status) {
+    const copy = STATUS_COPY[status];
+    return copy ? `${status} · ${copy.label}` : status;
+  }
+
+  function stepStatusText(status) {
+    const labels = {
+      pending: "等待执行",
+      running: "执行中",
+      done: "已完成",
+      failed: "已失败",
+    };
+    return labels[status] ? `${status} · ${labels[status]}` : status;
+  }
+
+  function overrideList(overrides) {
+    const entries = Object.entries(overrides);
+    if (!entries.length) {
+      return element("p", "override-empty", "本步无 L3 覆盖：完整继承上一步当前值");
+    }
+    const list = element("ul", "override-list");
+    entries.forEach(([key, value]) => {
+      const item = element("li", `override-entry${value === "" ? " override-entry--keep" : ""}`);
+      item.append(
+        element("code", "", `${key}=${valueText(value)}`),
+        element(
+          "span",
+          "",
+          value === "" ? "保持上一步当前值" : "从本步起粘性生效",
+        ),
+      );
+      list.append(item);
+    });
+    return list;
   }
 
   function chip(parent, text, className = "chip") {
@@ -72,6 +109,7 @@
   function formatDate(value) {
     if (!value) return "—";
     return new Intl.DateTimeFormat("zh-CN", {
+      year: "numeric",
       month: "2-digit",
       day: "2-digit",
       hour: "2-digit",
@@ -206,7 +244,12 @@
     const fragment = document.createDocumentFragment();
     STATUSES.forEach((status) => {
       const card = element("article", `stat-card status-${status}`);
-      card.append(element("span", "", status), element("strong", "", counts[status]));
+      const copy = STATUS_COPY[status];
+      card.append(
+        element("span", "stat-card__key", status),
+        element("strong", "", counts[status]),
+        element("p", "stat-card__meaning", `${copy.label} · ${copy.meaning}`),
+      );
       fragment.append(card);
     });
     dom.summary.replaceChildren(fragment);
@@ -236,13 +279,27 @@
 
     const content = element("div", "step__content");
     const topline = element("div", "step__topline");
-    topline.append(element("h5", "", step.name), element("span", "badge", step.status));
+    topline.append(
+      element("h5", "", step.name),
+      element("span", "badge", stepStatusText(step.status)),
+    );
     content.append(topline);
-    content.append(element("p", "step__override", `L3 override · ${inlineParameters(step.overrides)}`));
+    const overrideBlock = element("div", "step__override");
+    overrideBlock.append(
+      element("span", "parameter-label", "L3 override · 本步覆盖规则"),
+      overrideList(step.overrides),
+    );
+    content.append(overrideBlock);
 
     const resolved = element("div", "resolved-block");
+    const resolvedCopy = {
+      pending: "启动时预计算参数 · 尚未执行",
+      running: "当前正在使用的参数",
+      done: "执行成功时的参数快照",
+      failed: "执行失败时的参数快照",
+    }[step.status] || "本 Step 参数快照";
     resolved.append(
-      element("span", "parameter-label", "Resolved parameters · 最终参数"),
+      element("span", "parameter-label", `Resolved parameters · ${resolvedCopy}`),
       parameterList(step.resolved_parameters, "任务启动时解析"),
     );
     content.append(resolved);
@@ -269,6 +326,65 @@
     return item;
   }
 
+  function logLedger(task) {
+    const ledger = element("section", "log-ledger");
+    const titleId = `task-${task.id}-logs-title`;
+    ledger.setAttribute("aria-labelledby", titleId);
+
+    const header = element("div", "log-ledger__header");
+    const title = element("h4", "", `任务 #${task.id} · 执行日志台账`);
+    title.id = titleId;
+    header.append(title, element("span", "task-id", `${task.execution_logs.length} LOGS`));
+    ledger.append(header);
+
+    if (!task.execution_logs.length) {
+      ledger.append(element(
+        "p",
+        "log-ledger__empty",
+        "尚无执行日志：running Step 的首次完成上报会写入 1 条，重复上报不会新增。",
+      ));
+      return ledger;
+    }
+
+    const wrap = element("div", "log-table-wrap");
+    wrap.tabIndex = 0;
+    wrap.setAttribute("aria-label", `任务 ${task.id} 执行日志表，可横向滚动`);
+    const table = element("table", "log-table");
+    const head = element("thead");
+    const headRow = element("tr");
+    ["Log ID", "Task ID", "Step 序号", "执行结果", "完成时间"].forEach((label) => {
+      headRow.append(element("th", "", label));
+    });
+    head.append(headRow);
+
+    const body = element("tbody");
+    task.execution_logs.forEach((log) => {
+      const row = element("tr");
+      row.append(
+        element("td", "log-id", `#${log.id}`),
+        element("td", "log-id", `#${log.task_id}`),
+        element("td", "", `Step ${log.step_sequence}`),
+      );
+      const resultCell = element("td");
+      resultCell.append(element(
+        "span",
+        `log-result ${log.success ? "log-result--success" : "log-result--failure"}`,
+        log.success ? "成功" : "失败",
+      ));
+      row.append(resultCell);
+      const completedCell = element("td");
+      const completed = element("time", "", formatDate(log.completed_at));
+      completed.dateTime = log.completed_at;
+      completedCell.append(completed);
+      row.append(completedCell);
+      body.append(row);
+    });
+    table.append(head, body);
+    wrap.append(table);
+    ledger.append(wrap);
+    return ledger;
+  }
+
   function taskCard(task) {
     const card = element("article", `task-card status-${task.status}`);
     const header = element("div", "task-card__header");
@@ -276,7 +392,7 @@
     const topline = element("div", "task-card__topline");
     topline.append(
       element("span", "task-id", `TASK / ${task.id}`),
-      element("span", "badge", task.status),
+      element("span", "badge", statusText(task.status)),
     );
     identity.append(topline, element("h3", "", task.name));
     const meta = element("div", "task-meta");
@@ -293,6 +409,7 @@
     side.append(element("span", "progress-copy", `步骤进度 ${finished} / ${task.steps.length}`));
     const progress = element("div", "progress");
     progress.setAttribute("role", "progressbar");
+    progress.setAttribute("aria-label", `任务 ${task.id} 的步骤进度`);
     progress.setAttribute("aria-valuemin", "0");
     progress.setAttribute("aria-valuemax", "100");
     progress.setAttribute("aria-valuenow", percent);
@@ -318,7 +435,7 @@
     const steps = element("ol", "steps");
     task.steps.forEach((step) => steps.append(stepItem(task, step)));
     stepsWrap.append(heading, steps);
-    card.append(stepsWrap);
+    card.append(stepsWrap, logLedger(task));
     return card;
   }
 
@@ -391,7 +508,7 @@
         }
         lastUpdated = new Date();
         updateTimestamp();
-        setConnection("online", "实时连接 · 1.5s");
+        setConnection("online", "轮询正常 · 1.5s");
         clearConnectionError();
         if (announce) showMessage("任务状态已刷新");
         return tasks;
@@ -439,18 +556,36 @@
         { ...credentials, success: true },
       ));
       const settled = await Promise.allSettled(requests);
-      const fulfilled = settled.filter((result) => result.status === "fulfilled").length;
+      const fulfilledPayloads = settled
+        .filter((result) => result.status === "fulfilled")
+        .map((result) => result.value);
+      const inserted = fulfilledPayloads.filter(
+        (payload) => payload.inserted === true && payload.duplicate === false,
+      ).length;
+      const duplicates = fulfilledPayloads.filter(
+        (payload) => payload.inserted === false && payload.duplicate === true,
+      ).length;
+      const invalid = fulfilledPayloads.length - inserted - duplicates;
+      const rejected = settled.length - fulfilledPayloads.length;
       await loadTasks({ force: true });
 
       const task = tasks.find((item) => item.id === Number(taskId));
-      const logCount = task.execution_logs.filter((log) => log.step_sequence === Number(sequence)).length;
-      if (fulfilled === 5 && logCount === 1) {
-        showVerification("幂等验证通过", "5/5 次请求成功，数据库中该步骤仍只有 1 条执行日志");
-        showMessage(`任务 ${taskId} / Step ${sequence}：并发上报成功，日志保持 1 条`);
+      const logCount = task
+        ? task.execution_logs.filter((log) => log.step_sequence === Number(sequence)).length
+        : null;
+      const responseSummary = `${inserted} inserted + ${duplicates} duplicate/no-op`;
+      if (inserted === 1 && duplicates === 4 && invalid === 0 && rejected === 0 && logCount === 1) {
+        showVerification(
+          "幂等验证通过 · 5/5 响应",
+          `API：${responseSummary}；DB：${logCount} row（该 Step）`,
+        );
+        showMessage(
+          `任务 ${taskId} / Step ${sequence}：1 次写入 + 4 次重复 no-op，数据库仍为 1 条日志`,
+        );
       } else {
         showVerification(
           "验证结果异常",
-          `${fulfilled}/5 次请求成功，实际日志 ${logCount} 条`,
+          `API：${responseSummary} + ${invalid} 无效 + ${rejected} 失败；DB：${logCount === null ? "未读到任务" : `${logCount} row`}`,
           true,
         );
         showMessage("并发验证未达到预期，请查看服务日志", true);

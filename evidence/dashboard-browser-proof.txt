@@ -1,0 +1,21 @@
+Captured: 2026-08-18 (Asia/Shanghai)
+Environment: ego-browser Chromium; FastAPI local server; isolated SQLite database
+
+DASHBOARD BROWSER ACCEPTANCE: PASS
+  first-screen demo guide             : 3 clear steps
+  five task states                    : English code + Chinese meaning
+  polling indicator                   : polling healthy / 1.5s
+  external API task visible by polling: yes, within 3 seconds without refresh
+  claim token stored in tab           : yes
+  claim token visible in page         : no
+  L3 non-empty semantics              : sticky from this Step
+  L3 empty-string semantics           : keep previous effective value
+  pending Step parameter label        : precomputed at start / not executed
+  running Step parameter label        : currently used parameters
+  completed Step parameter label      : execution-time snapshot
+  five completion requests            : 5/5 accepted
+  exact API response pattern          : 1 inserted + 4 duplicate/no-op
+  database log rows for the Step      : 1
+  visible ledger rows                 : 1
+  ledger fields                       : log id, task id, step sequence, result, completed time
+  next Step status                    : running

@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     claimed_by TEXT,
     claim_token TEXT,
     claimed_at TEXT,
+    lease_expires_at TEXT,
     started_at TEXT,
     completed_at TEXT,
     created_at TEXT NOT NULL,
@@ -73,6 +74,19 @@ CREATE TABLE IF NOT EXISTS execution_logs (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_pending
     ON tasks(created_at, id) WHERE status = 'pending';
+
+CREATE TABLE IF NOT EXISTS operation_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    level TEXT NOT NULL DEFAULT 'info' CHECK (level IN ('info', 'warning')),
+    event TEXT NOT NULL,
+    task_id INTEGER,
+    step_sequence INTEGER,
+    worker_id TEXT,
+    message TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_operation_logs_id ON operation_logs(id);
 """
 
 
@@ -117,6 +131,14 @@ def initialize_database(path: Optional[PathLike] = None) -> str:
     connection = connect(resolved)
     try:
         connection.executescript(SCHEMA)
+        # Single additive migration so databases created before the lease
+        # feature keep working; a full migration framework stays out of scope.
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        if "lease_expires_at" not in columns:
+            connection.execute("ALTER TABLE tasks ADD COLUMN lease_expires_at TEXT")
         connection.execute("PRAGMA optimize")
     finally:
         connection.close()

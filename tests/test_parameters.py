@@ -1,3 +1,5 @@
+import random
+
 from tests.helpers import (
     claim_task,
     create_group,
@@ -169,6 +171,79 @@ def test_complete_parameter_merge_boundary_matrix(client):
 
     assert resolved == [step_1, step_1, step_3, step_3, step_3]
     assert "never_seen" not in resolved[-1]
+
+
+def test_empty_string_inside_nested_object_is_a_literal_value():
+    # The keep-current semantic applies to top-level L3 keys only.  A nested
+    # object is one opaque value: it replaces wholesale, and any "" inside it
+    # is plain data rather than a keep-current marker.
+    snapshots = resolve_parameter_chain(
+        {"cfg": {"a": "base", "b": "base"}},
+        {},
+        [
+            {"cfg": {"a": "", "c": 3}},
+            {},
+        ],
+    )
+
+    assert snapshots == [
+        {"cfg": {"a": "", "c": 3}},
+        {"cfg": {"a": "", "c": 3}},
+    ]
+
+
+def _reference_oracle(base, group, overrides):
+    """Independent model: a key's value is its last non-"" override so far,
+    otherwise the initial base+group merge."""
+
+    initial = dict(base)
+    initial.update(group)
+    keys = set(initial)
+    for override in overrides:
+        keys.update(override)
+
+    snapshots = []
+    for index in range(len(overrides)):
+        snapshot = {}
+        for key in keys:
+            found = False
+            for later in range(index, -1, -1):
+                if key in overrides[later] and overrides[later][key] != "":
+                    snapshot[key] = overrides[later][key]
+                    found = True
+                    break
+            if not found and key in initial:
+                snapshot[key] = initial[key]
+        snapshots.append(snapshot)
+    return snapshots
+
+
+def test_random_override_chains_match_the_reference_oracle():
+    rng = random.Random(20260817)
+    keys = ["k1", "k2", "k3", "k4", "k5"]
+
+    def random_value(depth=0):
+        choices = ["", " ", 0, False, None, 17.5, "text-{}".format(rng.random())]
+        if depth == 0:
+            choices += [
+                {"nested": random_value(1), "": random_value(1)},
+                [random_value(1), random_value(1)],
+            ]
+        return rng.choice(choices)
+
+    def random_object(max_size):
+        return {
+            key: random_value()
+            for key in rng.sample(keys, rng.randint(0, max_size))
+        }
+
+    for _ in range(200):
+        base = random_object(5)
+        group = random_object(3)
+        overrides = [random_object(4) for _ in range(rng.randint(1, 6))]
+        assert resolve_parameter_chain(base, group, overrides) == _reference_oracle(
+            base, group, overrides
+        )
 
 
 def test_no_group_and_empty_dictionaries(client):

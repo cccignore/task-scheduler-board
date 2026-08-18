@@ -3,96 +3,214 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="任务调度系统实时状态与幂等验证看板">
-    <meta name="theme-color" content="#17251f">
-    <title>任务调度台</title>
+    <meta name="description" content="任务调度系统实时看板：三层参数合并、并发安全认领、幂等日志，全部可在页面上操作与验证">
+    <meta name="theme-color" content="#fcfcfb">
+    <title>任务调度台 · Task Dispatch</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body>
-    <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <a class="skip-link" href="#board-title">跳到任务看板</a>
 
-    <header class="masthead">
-      <div class="topbar">
-        <a class="wordmark" href="#main-content">KAPI<span>.</span>OPS</a>
-        <div id="connectionStatus" class="connection connection--loading" role="status" aria-live="polite">
-          <span class="connection__dot" aria-hidden="true"></span>
-          <span id="connectionText">正在连接</span>
+    <header class="topbar">
+      <div class="topbar__inner">
+        <span class="wordmark">任务调度台<em>Task Dispatch</em></span>
+        <div class="topbar__meta">
+          <span id="lastUpdated" class="timestamp">等待首次同步</span>
+          <span id="connectionStatus" class="connection connection--loading" role="status" aria-live="polite">
+            <span class="connection__dot" aria-hidden="true"></span>
+            <span id="connectionText">正在连接</span>
+          </span>
         </div>
-      </div>
-
-      <div class="hero">
-        <div>
-          <p class="eyebrow">Operations / Task Dispatch</p>
-          <h1>任务调度台</h1>
-          <p class="hero__lede">查看认领、执行与日志写入；任务数据每 1.5 秒自动刷新。</p>
-          <ol class="demo-guide" aria-label="现场演示三步">
-            <li><span>1</span><strong>创建</strong><small>点击“一键创建演示任务”</small></li>
-            <li><span>2</span><strong>并发上报</strong><small>在执行中 Step 点“并发完成 ×5”</small></li>
-            <li><span>3</span><strong>核对</strong><small>看 1 次写入、4 次 no-op 与 DB 1 条日志</small></li>
-          </ol>
-        </div>
-
-        <section class="operator" aria-labelledby="operator-title">
-          <div>
-            <p class="operator__kicker">当前操作者</p>
-            <h2 id="operator-title">Worker 控制台</h2>
-          </div>
-          <label class="field" for="workerId">
-            <span>Worker ID</span>
-            <input id="workerId" type="text" maxlength="64" autocomplete="off" spellcheck="false">
-          </label>
-          <p class="operator__note">认领成功后，claim token 会自动保存在当前标签页，用于后续启动和完成校验；页面不会展示凭证原文。</p>
-          <div class="operator__actions">
-            <button id="createDemoButton" class="button button--dark" type="button" data-operation-key="create">
-              一键创建演示任务
-            </button>
-            <button id="claimButton" class="button button--light" type="button" data-operation-key="claim">
-              认领下一个任务
-            </button>
-          </div>
-        </section>
       </div>
     </header>
 
-    <main id="main-content" class="page-shell" tabindex="-1">
-      <section aria-labelledby="overview-title">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow eyebrow--green">System snapshot</p>
-            <h2 id="overview-title">状态概览</h2>
-          </div>
-          <p id="lastUpdated" class="timestamp">等待首次同步</p>
+    <main class="shell" id="main-content">
+
+      <!-- 这是什么 + 流水线 + 三个核心保证（白话版） -->
+      <section class="intro" aria-label="系统说明">
+        <div class="intro__head">
+          <h1>多 Worker 任务调度 · 实时状态看板</h1>
+          <p class="intro__lede">
+            把它想象成一个「群发消息工厂」的调度中心：每个任务是一张有多道工序（Step）的工单，
+            许多工人（Worker 进程）同时来抢工单、按顺序干活、逐步汇报。这个页面就是车间大屏——
+            下面五个格子，就是一张工单一生会经过的位置：
+          </p>
         </div>
-        <div id="statusSummary" class="status-summary"></div>
+
+        <ol class="pipeline" aria-label="任务生命周期">
+          <li class="pipeline__stage status-pending"><i class="dot" aria-hidden="true"></i>pending<small>排队中</small></li>
+          <li class="pipeline__arrow" aria-hidden="true">→<small>工人抢单</small></li>
+          <li class="pipeline__stage status-claimed"><i class="dot" aria-hidden="true"></i>claimed<small>已被一名工人拿走</small></li>
+          <li class="pipeline__arrow" aria-hidden="true">→<small>开工·配方定稿</small></li>
+          <li class="pipeline__stage status-running"><i class="dot" aria-hidden="true"></i>running<small>逐道工序执行</small></li>
+          <li class="pipeline__arrow" aria-hidden="true">→<small>全部成功 / 任一失败</small></li>
+          <li class="pipeline__stage pipeline__stage--split">
+            <span class="status-done"><i class="dot" aria-hidden="true"></i>done<small>完成</small></span>
+            <span class="status-failed"><i class="dot" aria-hidden="true"></i>failed<small>失败</small></span>
+          </li>
+        </ol>
+
+        <ul class="pillars">
+          <li>
+            <strong>① 配方三层合并（参数）</strong>
+            <span>每道工序开工要拿一份「配方」：出厂默认值（L1）→ 所属组的统一调整（L2，<b>开工那一瞬间</b>定稿，之后组里再改也不影响）→ 工序自己的改动（L3，<b>改一次、后面工序都沿用</b>；写空串 <code>""</code> 表示“这项不改，沿用当前值”）。点任务卡就能看到每道工序拿到的完整配方。</span>
+          </li>
+          <li>
+            <strong>② 一张工单只给一个工人（并发认领）</strong>
+            <span>再多工人同时抢，数据库「排队窗口」一次只放一个人改状态；抢到的工人领一张随机「工牌」，之后开工、交活都要出示。工人失联？工单的<b>租约</b>到期自动收回重派，旧工牌作废。右侧「多进程证明」可现场用真实进程验证。</span>
+          </li>
+          <li>
+            <strong>③ 完工只记一笔账（幂等日志）</strong>
+            <span>网络重试、进程重启都可能把“完工”重复上报好几次。账本有唯一约束兜底：<b>只记第一笔</b>，后来矛盾的改口无效（但会在下方台账里留痕）。点执行中工序上的「并发完成 ×5」现场验证。</span>
+          </li>
+        </ul>
       </section>
 
-      <section class="board" aria-labelledby="board-title">
-        <div class="board__header">
-          <div>
-            <p class="eyebrow eyebrow--green">Live task queue</p>
-            <h2 id="board-title">全部任务</h2>
+      <!-- 操作台：所有演示都在页面上完成 -->
+      <section class="console" aria-labelledby="console-title">
+        <h2 id="console-title" class="console__title">操作台 · 三步走完整个演示，不需要命令行</h2>
+        <div class="console__grid">
+          <div class="console__cell">
+            <span class="cell-label"><i>1</i> 造任务</span>
+            <div class="cell-actions">
+              <button id="createDemoButton" class="button button--primary" type="button" data-operation-key="create">
+                一键演示任务
+              </button>
+              <button id="enqueueButton" class="button button--outline" type="button" data-operation-key="enqueue">
+                往队列加 3 个任务
+              </button>
+            </div>
+            <p class="cell-note">演示任务自带三道工序，配方恰好把 L1/L2/L3 规则演一遍。</p>
           </div>
-          <button id="refreshButton" class="button button--outline" type="button" data-operation-key="refresh">
-            立即刷新
-          </button>
+
+          <div class="console__cell">
+            <span class="cell-label"><i>2</i> 启动模拟工人（真实独立进程）</span>
+            <div class="cell-actions">
+              <button id="spawnOneButton" class="button button--outline" type="button" data-operation-key="spawn-1">
+                +1 名工人
+              </button>
+              <button id="spawnThreeButton" class="button button--outline" type="button" data-operation-key="spawn-3">
+                +3 名工人
+              </button>
+              <button id="stopWorkersButton" class="button button--ghost" type="button" data-operation-key="stop-workers">
+                全部下班
+              </button>
+              <label class="toggle" for="failToggle">
+                <input id="failToggle" type="checkbox">
+                <span>偶尔失败（15%），演示失败终止</span>
+              </label>
+            </div>
+            <div id="workerChips" class="worker-chips" aria-live="polite"></div>
+          </div>
+
+          <div class="console__cell">
+            <span class="cell-label"><i>3</i> 或者自己当工人 / 维护</span>
+            <div class="cell-actions">
+              <label class="field field--inline" for="workerId">
+                <span>我的工号</span>
+                <input id="workerId" type="text" maxlength="64" autocomplete="off" spellcheck="false">
+              </label>
+              <button id="claimButton" class="button button--outline" type="button" data-operation-key="claim">
+                领一个任务
+              </button>
+              <button id="refreshButton" class="button button--ghost" type="button" data-operation-key="refresh">
+                立即刷新
+              </button>
+              <button id="resetButton" class="button button--danger-ghost" type="button" data-operation-key="reset">
+                清空看板
+              </button>
+            </div>
+            <p class="cell-note">手动认领后，凭证（工牌）保存在本标签页；启动、完成上报都要凭它。页面不展示凭证原文。</p>
+          </div>
         </div>
         <div id="globalMessage" class="notice" role="status" aria-live="polite" hidden></div>
-        <div id="taskList" class="task-list" aria-busy="true"></div>
       </section>
 
-      <section class="verification" aria-labelledby="verification-title">
-        <div>
-          <p class="eyebrow">Idempotency demo</p>
-          <h2 id="verification-title">并发幂等验证</h2>
-          <p>在 running 步骤点击“并发完成 ×5”，页面会同时发送五个相同请求，再读取实际日志条数。</p>
-        </div>
-        <div id="verificationResult" class="verification__result" role="status" aria-live="polite">
-          <strong>等待验证</strong>
-          <span>尚未发起重复完成上报</span>
-        </div>
+      <!-- 状态概览 -->
+      <section aria-label="状态概览">
+        <div id="statusSummary" class="stat-row"></div>
       </section>
+
+      <!-- 看板 -->
+      <section class="board" aria-labelledby="board-title">
+        <div class="board__header">
+          <h2 id="board-title">任务看板</h2>
+          <p class="board__hint">点击任务卡查看配方三层、每道工序与执行日志</p>
+        </div>
+        <div id="kanban" class="kanban" aria-busy="true"></div>
+      </section>
+
+      <!-- 验证 + 多进程证明 -->
+      <div class="duo">
+        <section class="panel" aria-labelledby="verification-title">
+          <h2 id="verification-title">幂等验证 · 并发完成 ×5</h2>
+          <p class="panel__lede">
+            对执行中的工序同时发出 5 个相同的完成上报，预期恰好 <strong>1 次写入 + 4 次 no-op</strong>，
+            账本只有 1 条记录。按钮在执行中任务的卡片和详情里。
+          </p>
+          <div id="verificationSlots" class="slots" aria-hidden="true"></div>
+          <div id="verificationResult" class="verification" role="status" aria-live="polite">
+            <strong>等待验证</strong>
+            <span>先创建演示任务，再在执行中工序上点「并发完成 ×5」</span>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="proof-title">
+          <h2 id="proof-title">多进程证明 · 一键运行</h2>
+          <p class="panel__lede">
+            用真实的 spawn 子进程 + 各自独立的数据库连接，在<b>临时数据库</b>上现场攻击认领与幂等逻辑
+            （不影响当前看板）。这正是题目要求的“真实并发”测试。
+          </p>
+          <div class="cell-actions">
+            <button id="proofQuickButton" class="button button--verify" type="button" data-operation-key="proof-quick">
+              并发认领 · 快速（12 轮 × 6 进程）
+            </button>
+            <button id="proofFullButton" class="button button--outline" type="button" data-operation-key="proof-full">
+              完整（40 轮 × 8 进程）
+            </button>
+            <button id="proofIdemButton" class="button button--verify" type="button" data-operation-key="proof-idem">
+              幂等写入（5 进程同报）
+            </button>
+          </div>
+          <div id="proofResult" class="verification" role="status" aria-live="polite">
+            <strong>尚未运行</strong>
+            <span>点击上方按钮运行；真实多进程需要几秒钟</span>
+          </div>
+        </section>
+      </div>
+
+      <!-- 系统操作台账 -->
+      <section class="panel" aria-labelledby="logbook-title">
+        <div class="logbook__header">
+          <div>
+            <h2 id="logbook-title">系统操作台账</h2>
+            <p class="panel__lede">
+              所有进程（页面操作、模拟工人、命令行脚本）的认领 / 开工 / 上报 / 重复忽略 / 租约回收，都写进同一张
+              <code>operation_logs</code> 表——这里读的就是它，不是前端拼出来的。
+            </p>
+          </div>
+          <label class="toggle" for="logFilterWarn">
+            <input id="logFilterWarn" type="checkbox">
+            <span>只看告警（矛盾上报 / 失败 / 回收）</span>
+          </label>
+        </div>
+        <ol id="logbook" class="logbook" aria-live="polite"></ol>
+      </section>
+
+      <footer class="foot">
+        SQLite WAL · 每操作独立连接 · 事务化认领 + 租约回收 · 幂等日志由唯一约束兜底 · 数据每 1.5s 轮询
+      </footer>
     </main>
+
+    <!-- 任务详情弹层 -->
+    <div id="taskModal" class="modal" hidden>
+      <div class="modal__backdrop" data-modal-close></div>
+      <div class="modal__dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <button class="modal__close" type="button" data-modal-close aria-label="关闭任务详情">×</button>
+        <div id="modalBody" class="modal__body"></div>
+      </div>
+    </div>
 
     <noscript><div class="noscript">此看板需要启用 JavaScript。</div></noscript>
     <script src="/static/app.js" defer></script>

@@ -37,3 +37,14 @@ class ClaimCredentials(WorkerRequest):
 
 class CompleteStepRequest(ClaimCredentials):
     success: bool
+
+
+class WorkerSpawnRequest(BaseModel):
+    count: int = Field(default=1, ge=1, le=10)
+    step_seconds: float = Field(default=1.2, ge=0.2, le=10.0)
+    fail_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class ProofRequest(BaseModel):
+    rounds: int = Field(default=12, ge=1, le=40)
+    workers: int = Field(default=6, ge=2, le=10)

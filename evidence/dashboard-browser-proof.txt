@@ -1,21 +1,26 @@
 Captured: 2026-08-18 (Asia/Shanghai)
-Environment: ego-browser Chromium; FastAPI local server; isolated SQLite database
+Environment: ego-browser Chromium (CDP); FastAPI local server on :8123; isolated SQLite database
+UI version: kanban dashboard (five-column pipeline redesign)
 
 DASHBOARD BROWSER ACCEPTANCE: PASS
-  first-screen demo guide             : 3 clear steps
-  five task states                    : English code + Chinese meaning
-  polling indicator                   : polling healthy / 1.5s
-  external API task visible by polling: yes, within 3 seconds without refresh
-  claim token stored in tab           : yes
-  claim token visible in page         : no
-  L3 non-empty semantics              : sticky from this Step
-  L3 empty-string semantics           : keep previous effective value
-  pending Step parameter label        : precomputed at start / not executed
-  running Step parameter label        : currently used parameters
-  completed Step parameter label      : execution-time snapshot
-  five completion requests            : 5/5 accepted
-  exact API response pattern          : 1 inserted + 4 duplicate/no-op
-  database log rows for the Step      : 1
-  visible ledger rows                 : 1
-  ledger fields                       : log id, task id, step sequence, result, completed time
-  next Step status                    : running
+  first screen explains the system      : lifecycle pipeline diagram + 3 invariants
+                                          (layered parameters / exclusive claim / idempotent log)
+  five task states                      : five kanban columns, color + text label + count
+  stat tiles                            : per-status counts with meaning line
+  polling indicator                     : "轮询正常 · 1.5s", green
+  demo seed via UI button               : running task + pending task created, worker switched
+  claim token stored in tab             : yes (sessionStorage)
+  claim token visible in page           : no
+  x5 button gated by token              : task claimed outside this tab shows NO x5 button
+  five concurrent completion requests   : 5/5 responded
+  exact API response pattern            : 1 inserted + 4 duplicate/no-op (slot visualization)
+  database log rows for the Step        : 1 (log id shown in step detail)
+  task detail modal                     : L1 / frozen L2 snapshot / current effective value
+                                          side by side; per-step resolved snapshots
+  L3 non-empty semantics badge          : "覆盖 · 粘性生效"
+  L3 empty-string semantics badge       : "空串 · 保持当前值"
+  lease countdown                       : live "租约剩余 mm:ss" on claimed/running cards
+  event feed                            : connect / task created / claim / step report events
+  real worker processes                 : scripts/run_worker.py --workers 2 consumed the queue;
+                                          each task claimed by exactly one worker; the
+                                          lease-held demo task was not stolen

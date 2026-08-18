@@ -37,6 +37,12 @@ for each (key, value) in O_i:
 
 合并语义是**浅层的**：只比较顶层 key，遇到嵌套对象就把整个对象当作一个值替换，不递归补齐其内部字段。但保存每个 `E_i` 时会做独立复制，所以修改后一个快照不会反向污染前一个快照。
 
+由此推论：**`""` 的保持语义只作用于顶层 key**。嵌套对象内部出现的 `""`（如 `{"cfg": {"a": ""}}`）只是普通数据——整个 `cfg` 对象作为一个值粘性覆盖，内部的空串原样保留，不触发“保持当前值”。
+
+### 崩溃恢复不改变参数语义
+
+任务因租约过期被回收、由新 Worker 续跑时，`G*` 仍是**首次** start 冻结的快照（存储在任务行里，resume 时直接复用，不会重读已变化的组），所有 `E_i` 因输入不变而保持相同。`test_reclaimed_running_task_resumes_from_first_pending_step` 对此有断言。
+
 ## 一个完整的 Step 1 → Step 5 演算
 
 下面 L1、L2 和五个 L3 的数据取自 `test_complete_parameter_merge_boundary_matrix`。再把 `test_group_override_is_snapshotted_exactly_at_start` 验证的启动时序放到同一条时间线上：
@@ -106,6 +112,8 @@ for each (key, value) in O_i:
 | [`test_pure_chain_returns_independent_snapshots_and_keeps_json_falsy_values`](tests/test_parameters.py) | L2 空字符串保留；L3 的 `0/false/null` 正常写入；L3 空字符串保持旧值且不创建新 key；修改后一快照不影响前一快照 |
 | [`test_only_exact_empty_string_skips_and_nested_snapshots_are_deep_copies`](tests/test_parameters.py) | 只有精确 `""` 才跳过；`{}`、`[]`、`" "` 都正常覆盖并粘性传递；嵌套 list/dict 在不同 Step 快照间也是深度独立的 |
 | [`test_complete_parameter_merge_boundary_matrix`](tests/test_parameters.py) | 逐 key 跑完上述 Step 1–5，覆盖 L1/L2/L3、L2/L3 新 key、L2/L3 空字符串差异、粘性传递、后续再覆盖、JSON 假值、嵌套对象整体替换，并断言完整快照列表与 `never_seen` 不存在 |
+| [`test_empty_string_inside_nested_object_is_a_literal_value`](tests/test_parameters.py) | 嵌套对象整体替换；对象内部的 `""` 是字面值，不触发保持语义 |
+| [`test_random_override_chains_match_the_reference_oracle`](tests/test_parameters.py) | 200 组随机 L1/L2/L3 链与一个独立实现的参照模型逐快照比对：“某 key 的当前值 = 截至本 Step 最后一次非空覆盖，否则初始合并值” |
 | [`test_no_group_and_empty_dictionaries`](tests/test_parameters.py) | 没有 Group 时 `G*={}` 仍能正常递推；空 Step 字典和对旧 key 的空字符串都不会丢掉 L1；后续 Step 可新增 key |
 | [`test_group_override_is_snapshotted_exactly_at_start`](tests/test_parameters.py) | Group 创建值不是永久冻结值：start 前更新可见，start 后更新不泄漏，持有者重试 start 仍复用已保存的 `G*` 和 `E_i` |
 

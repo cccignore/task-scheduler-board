@@ -1,5 +1,9 @@
 """FastAPI entry point for the task scheduling dashboard."""
 
+import logging
+import sqlite3
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
@@ -14,8 +18,10 @@ from .schemas import (
     CompleteStepRequest,
     GroupCreate,
     GroupUpdate,
+    ProofRequest,
     TaskCreate,
     WorkerRequest,
+    WorkerSpawnRequest,
 )
 from .services import (
     ConflictError,
@@ -28,11 +34,19 @@ from .services import (
     create_task,
     get_task,
     list_groups,
+    list_operation_logs,
     list_tasks,
+    reset_all,
     seed_demo,
     start_task,
     update_group,
 )
+from .worker_manager import MAX_MANAGED_WORKERS, WorkerManager
+
+
+# The multiprocess proofs are CPU-heavy and briefly mutate process-wide state
+# (a temporary TASKBOARD_DB_PATH), so at most one may run at a time.
+_proof_lock = threading.Lock()
 
 
 PathLike = Union[str, Path]
@@ -49,14 +63,32 @@ def _model_dict(model: Any) -> Dict[str, Any]:
 def create_app(database_path: Optional[PathLike] = None) -> FastAPI:
     """Build an isolated application, optionally bound to an explicit DB file."""
 
+    # Surface the service layer's claim/report/reclaim audit trail on the
+    # console without overriding a host application's logging setup.
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+        )
+
     selected_database = resolve_database_path(database_path)
     initialize_database(selected_database)
+    worker_manager = WorkerManager(selected_database)
+
+    @asynccontextmanager
+    async def lifespan(_application: FastAPI):
+        try:
+            yield
+        finally:
+            worker_manager.stop_all()
+
     application = FastAPI(
         title="Task Scheduling Dashboard",
         version="1.0.0",
         description="Concurrent-safe task claiming and idempotent step reporting.",
+        lifespan=lifespan,
     )
     application.state.database_path = selected_database
+    application.state.worker_manager = worker_manager
 
     @application.exception_handler(NotFoundError)
     async def handle_not_found(_request: Request, exc: NotFoundError) -> JSONResponse:
@@ -77,6 +109,21 @@ def create_app(database_path: Optional[PathLike] = None) -> FastAPI:
         _request: Request, exc: ServiceError
     ) -> JSONResponse:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @application.exception_handler(sqlite3.OperationalError)
+    async def handle_database_busy(
+        _request: Request, exc: sqlite3.OperationalError
+    ) -> JSONResponse:
+        # Write-lock contention beyond busy_timeout is retryable back-pressure,
+        # not an internal error; anything else stays a genuine 500.
+        message = str(exc).lower()
+        if "locked" not in message and "busy" not in message:
+            raise exc
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "database is busy, please retry"},
+            headers={"Retry-After": "1"},
+        )
 
     @application.get("/api/health")
     def health() -> Dict[str, str]:
@@ -164,6 +211,77 @@ def create_app(database_path: Optional[PathLike] = None) -> FastAPI:
     def demo_seed() -> Dict[str, Any]:
         result = seed_demo(selected_database)
         return dict(result, task=result["running_task"])
+
+    @application.get("/api/logs")
+    def logs_index(
+        after_id: Optional[int] = None, limit: int = 200
+    ) -> Dict[str, Any]:
+        return {"logs": list_operation_logs(selected_database, after_id, limit)}
+
+    @application.get("/api/workers/managed")
+    def workers_index() -> Dict[str, Any]:
+        return {
+            "workers": worker_manager.describe(),
+            "max_workers": MAX_MANAGED_WORKERS,
+        }
+
+    @application.post("/api/workers/managed", status_code=status.HTTP_201_CREATED)
+    def workers_spawn(body: WorkerSpawnRequest) -> Dict[str, Any]:
+        workers = worker_manager.spawn(
+            count=body.count,
+            step_seconds=body.step_seconds,
+            fail_rate=body.fail_rate,
+        )
+        return {"workers": workers, "max_workers": MAX_MANAGED_WORKERS}
+
+    @application.post("/api/workers/managed/stop")
+    def workers_stop() -> Dict[str, Any]:
+        stopped = worker_manager.stop_all()
+        return {"stopped": stopped, "workers": []}
+
+    @application.post("/api/proofs/claim")
+    def proofs_claim(body: ProofRequest) -> Dict[str, Any]:
+        # Runs in FastAPI's threadpool (sync route); the proof spawns real OS
+        # processes racing over a temporary database, never the live board.
+        if not _proof_lock.acquire(blocking=False):
+            raise ConflictError("another proof is already running")
+        try:
+            from scripts.run_concurrency_proof import run_claim_proof
+
+            stats = run_claim_proof(
+                rounds=body.rounds, workers=body.workers, quiet=True
+            )
+            return {"kind": "claim", "stats": stats}
+        except (AssertionError, ValueError) as exc:
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "并发认领证明未通过：{}".format(exc)},
+            )
+        finally:
+            _proof_lock.release()
+
+    @application.post("/api/proofs/idempotency")
+    def proofs_idempotency() -> Dict[str, Any]:
+        if not _proof_lock.acquire(blocking=False):
+            raise ConflictError("another proof is already running")
+        try:
+            from scripts.run_idempotency_proof import run_idempotency_proof
+
+            stats = run_idempotency_proof(quiet=True)
+            return {"kind": "idempotency", "stats": stats}
+        except (AssertionError, ValueError) as exc:
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "幂等写入证明未通过：{}".format(exc)},
+            )
+        finally:
+            _proof_lock.release()
+
+    @application.post("/api/reset")
+    def reset_board() -> Dict[str, Any]:
+        stopped = worker_manager.stop_all()
+        reset_all(selected_database)
+        return {"ok": True, "stopped_workers": stopped}
 
     static_directory = Path(__file__).resolve().parent / "static"
     if static_directory.is_dir():

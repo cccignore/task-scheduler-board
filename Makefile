@@ -1,4 +1,4 @@
-.PHONY: install run test proof
+.PHONY: install run test proof worker
 
 install:
 	python3 -m pip install '.[dev]'
@@ -12,3 +12,6 @@ test:
 proof:
 	python3 scripts/run_concurrency_proof.py
 	python3 scripts/run_idempotency_proof.py
+
+worker:
+	python3 scripts/run_worker.py --workers 3

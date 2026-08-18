@@ -1,6 +1,6 @@
 Captured: 2026-08-18 (Asia/Shanghai)
 Environment: ego-browser Chromium (CDP); FastAPI local server on :8123; isolated SQLite database
-UI version: kanban dashboard (five-column pipeline redesign)
+UI version: kanban dashboard (five-column pipeline + console; claim-lease + manual-requeue semantics)
 
 DASHBOARD BROWSER ACCEPTANCE: PASS
   first screen explains the system      : lifecycle pipeline diagram + 3 invariants
@@ -19,7 +19,9 @@ DASHBOARD BROWSER ACCEPTANCE: PASS
                                           side by side; per-step resolved snapshots
   L3 non-empty semantics badge          : "覆盖 · 粘性生效"
   L3 empty-string semantics badge       : "空串 · 保持当前值"
-  lease countdown                       : live "租约剩余 mm:ss" on claimed/running cards
+  lease countdown                       : live "租约剩余 mm:ss" on claimed cards only
+                                          (running tasks are never auto-reclaimed; manual
+                                          requeue button with risk confirm in task detail)
   event feed                            : connect / task created / claim / step report events
   real worker processes                 : scripts/run_worker.py --workers 2 consumed the queue;
                                           each task claimed by exactly one worker; the

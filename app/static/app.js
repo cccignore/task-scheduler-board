@@ -361,7 +361,7 @@
       return;
     }
     if (remaining <= 0) {
-      span.textContent = "租约已过期 · 下次认领时回收";
+      span.textContent = "开工租约已过期 · 下次认领时回收";
       span.className = "lease--expired";
       return;
     }
@@ -706,21 +706,27 @@
     if (lease) meta.append(lease);
     header.append(meta);
 
-    if (task.status === "claimed") {
+    if (task.status === "claimed" || task.status === "running") {
       const token = storedClaimToken(task.id);
       const actionRow = element("div", "card__actions");
-      if (token) {
+      if (task.status === "claimed" && token) {
         const start = element("button", "button button--primary", "启动任务（冻结组参数快照）");
         start.type = "button";
         start.dataset.action = "start";
         start.dataset.taskId = task.id;
         start.dataset.operationKey = `start-${task.id}`;
         actionRow.append(start);
-      } else {
+      } else if (task.status === "claimed") {
         actionRow.append(
           element("span", "step__log", "此任务的凭证不在本标签页（可能属于模拟工人或其他页面），这里只能查看"),
         );
       }
+      const requeue = element("button", "button button--danger-ghost button--small", "手动重派（回收重新排队）");
+      requeue.type = "button";
+      requeue.dataset.action = "requeue";
+      requeue.dataset.taskId = task.id;
+      requeue.dataset.operationKey = `requeue-${task.id}`;
+      actionRow.append(requeue);
       header.append(actionRow);
     }
     body.append(header);
@@ -1177,6 +1183,17 @@
           `start-${taskId}`,
           () => request(API.start(taskId), "POST", taskCredentials(taskId)),
           () => `任务 #${taskId} 已启动：组参数已定稿，全部工序的生效配方已解析`,
+        );
+      } else if (action === "requeue") {
+        const taskId = Number(button.dataset.taskId);
+        const confirmed = window.confirm(
+          `确定手动重派任务 #${taskId} 吗？\n持有者凭证将作废，任务回到排队中；已完成 Step 的日志保留。\n注意：若原工人已执行过外部动作（如已发出消息），重派可能造成重复执行——这正是系统不自动回收已开工任务的原因。`,
+        );
+        if (!confirmed) return;
+        runAction(
+          `requeue-${taskId}`,
+          () => request(`/api/tasks/${taskId}/requeue`, "POST"),
+          () => `任务 #${taskId} 已回收重新排队；下一个认领者将从第一个未完成 Step 续跑`,
         );
       } else if (action === "complete") {
         completeFiveTimes(button.dataset.taskId, button.dataset.sequence);

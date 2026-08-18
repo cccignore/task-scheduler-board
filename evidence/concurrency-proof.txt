@@ -1,4 +1,4 @@
-Captured: 2026-08-17 (Asia/Shanghai)
+Captured: 2026-08-18 (Asia/Shanghai) — regenerated at the final submitted code state
 Environment: Python 3.9.6; SQLite 3.54.0; macOS arm64
 Command: .venv/bin/python scripts/run_concurrency_proof.py
 
@@ -7,7 +7,7 @@ REAL MULTIPROCESS CLAIM PROOF: PASS
   worker processes             : 8
   unique ready process ids     : 8
   verified pre-open connections: 8
-  ready pid/connection records : 23203/4393730576, 23204/4460216848, 23205/4452319760, 23206/4456923664, 23207/4427186704, 23208/4422681104, 23209/4457497104, 23210/4463133200
+  ready pid/connection records : 90352/4385070656, 90353/4395310656, 90354/4452785728, 90355/4394901056, 90356/4450819648, 90357/4396998208, 90358/4459241024, 90359/4455374400
   one-task race rounds         : 40
   observed claim calls         : 320
   observed result records      : 320

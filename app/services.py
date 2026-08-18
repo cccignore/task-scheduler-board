@@ -546,48 +546,37 @@ def get_task(db_path: DatabasePath, task_id: int) -> JsonObject:
 
 
 def _reclaim_expired_leases(connection: sqlite3.Connection, now: str) -> List[int]:
-    """Inside an open write transaction, push lease-expired tasks back to pending.
+    """Inside an open write transaction, requeue lease-expired *claimed* tasks.
 
-    Completed steps keep their statuses and execution logs, so the next owner
-    resumes from the first still-pending step instead of redoing finished work.
+    Only tasks that never started are reclaimed automatically: between claim
+    and start a worker has produced no external side effects, so re-issuing
+    the task cannot double-execute anything.  A running task is never taken
+    back automatically -- the rotated token would fence its database writes,
+    but not an already-sent message; stuck running tasks require an explicit
+    operator requeue (see ``requeue_task``).
     """
 
     expired = connection.execute(
         """
-        SELECT id FROM tasks
-        WHERE status IN ('claimed', 'running')
+        SELECT id, claimed_by FROM tasks
+        WHERE status = 'claimed'
             AND lease_expires_at IS NOT NULL AND lease_expires_at < ?
         ORDER BY id
         """,
         (now,),
     ).fetchall()
-    task_ids = [row["id"] for row in expired]
-    if not task_ids:
-        return task_ids
+    if not expired:
+        return []
 
-    previous_owners = {
-        row["id"]: row["claimed_by"]
-        for row in connection.execute(
-            "SELECT id, claimed_by FROM tasks WHERE id IN ({})".format(
-                ",".join("?" for _ in task_ids)
-            ),
-            task_ids,
-        ).fetchall()
-    }
+    task_ids = [row["id"] for row in expired]
+    previous_owners = {row["id"]: row["claimed_by"] for row in expired}
     placeholders = ",".join("?" for _ in task_ids)
-    connection.execute(
-        """
-        UPDATE steps SET status = 'pending', started_at = NULL
-        WHERE status = 'running' AND task_id IN ({})
-        """.format(placeholders),
-        task_ids,
-    )
     connection.execute(
         """
         UPDATE tasks
         SET status = 'pending', claimed_by = NULL, claim_token = NULL,
             claimed_at = NULL, lease_expires_at = NULL, updated_at = ?
-        WHERE id IN ({})
+        WHERE id IN ({}) AND status = 'claimed'
         """.format(placeholders),
         [now] + task_ids,
     )
@@ -595,14 +584,14 @@ def _reclaim_expired_leases(connection: sqlite3.Connection, now: str) -> List[in
         _record_operation(
             connection,
             "lease_reclaim",
-            "任务 #{} 租约过期被回收，重新排队；原持有者 {} 的凭证已作废".format(
+            "任务 #{} 认领后未在租约内开工，被自动收回重新排队；原持有者 {} 的凭证已作废".format(
                 task_id, previous_owners.get(task_id) or "未知"
             ),
             level="warning",
             task_id=task_id,
             worker_id=previous_owners.get(task_id),
         )
-    logger.info("reclaimed %d expired lease(s): tasks %s", len(task_ids), task_ids)
+    logger.info("reclaimed %d expired claim lease(s): tasks %s", len(task_ids), task_ids)
     return task_ids
 
 
@@ -777,18 +766,20 @@ def start_task(
             """,
             (now, task_id, next_sequence),
         )
+        # The lease is a start deadline, not an execution deadline: once the
+        # task is running it may have produced external side effects, so the
+        # scheduler never auto-requeues it and the lease is cleared here.
         connection.execute(
             """
             UPDATE tasks
             SET status = 'running', group_parameters_snapshot = ?,
-                started_at = ?, lease_expires_at = ?, updated_at = ?
+                started_at = ?, lease_expires_at = NULL, updated_at = ?
             WHERE id = ? AND status = 'claimed'
                 AND claimed_by = ? AND claim_token = ?
             """,
             (
                 _json_dump(group_parameters),
                 task["started_at"] or now,
-                _lease_expiry(),
                 now,
                 task_id,
                 worker_id,
@@ -984,19 +975,13 @@ def complete_step(
                     """,
                     (now, task_id, next_step["sequence"]),
                 )
-                # Every successful report also renews the lease, so a live
-                # worker on a long task is never reclaimed mid-flight.
                 connection.execute(
-                    """
-                    UPDATE tasks SET lease_expires_at = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (_lease_expiry(), now, task_id),
+                    "UPDATE tasks SET updated_at = ? WHERE id = ?", (now, task_id)
                 )
                 _record_operation(
                     connection,
                     "step_report",
-                    "任务 #{} · Step {} 上报成功，唯一日志已写入 → Step {} 进入执行，租约已续期".format(
+                    "任务 #{} · Step {} 上报成功，唯一日志已写入 → Step {} 进入执行".format(
                         task_id, sequence, next_step["sequence"]
                     ),
                     task_id=task_id,
@@ -1033,6 +1018,70 @@ def complete_step(
     finally:
         if owns_connection:
             connection.close()
+
+
+def requeue_task(db_path: DatabasePath, task_id: int) -> JsonObject:
+    """Operator-initiated requeue of a stuck claimed/running task.
+
+    Deliberately manual: the scheduler cannot know whether a vanished worker's
+    external side effects are safe to replay, so a human makes that call.
+    Completed steps keep their statuses and execution logs; the next claim
+    issues a fresh token (the old worker's credentials stop working) and
+    start resumes from the first still-pending step with the frozen L2
+    snapshot unchanged.
+    """
+
+    connection = connect(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        task = connection.execute(
+            "SELECT * FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        if task is None:
+            raise NotFoundError("task {} was not found".format(task_id))
+        if task["status"] not in ("claimed", "running"):
+            raise ConflictError(
+                "task {} cannot be requeued from status {}".format(
+                    task_id, task["status"]
+                )
+            )
+        now = utc_now()
+        connection.execute(
+            """
+            UPDATE steps SET status = 'pending', started_at = NULL
+            WHERE task_id = ? AND status = 'running'
+            """,
+            (task_id,),
+        )
+        connection.execute(
+            """
+            UPDATE tasks
+            SET status = 'pending', claimed_by = NULL, claim_token = NULL,
+                claimed_at = NULL, lease_expires_at = NULL, updated_at = ?
+            WHERE id = ?
+            """,
+            (now, task_id),
+        )
+        _record_operation(
+            connection,
+            "manual_requeue",
+            "任务 #{} 被操作员手动重派：原持有者 {} 的凭证已作废；已完成 Step 的日志保留，"
+            "未完成部分将由下一个认领者续跑（外部副作用是否可重放由操作员确认）".format(
+                task_id, task["claimed_by"] or "未知"
+            ),
+            level="warning",
+            task_id=task_id,
+            worker_id=task["claimed_by"],
+        )
+        result = _task_from_connection(connection, task_id)
+        connection.commit()
+        return result
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def reset_all(db_path: DatabasePath) -> None:
@@ -1078,20 +1127,6 @@ def seed_demo(db_path: DatabasePath) -> JsonObject:
         demo_group = _group_from_row(group)
 
     suffix = datetime.now(timezone.utc).strftime("%H%M%S%f")
-    running = create_task(
-        db_path,
-        "Demo running {}".format(suffix),
-        demo_group["id"],
-        {"channel": "sms", "retries": 2, "locale": "zh-CN"},
-        [
-            {"name": "Prepare recipients", "overrides": {"batch": 100}},
-            {
-                "name": "Send messages",
-                "overrides": {"channel": "push", "batch": ""},
-            },
-            {"name": "Collect receipts", "overrides": {"retries": 3}},
-        ],
-    )
     pending = create_task(
         db_path,
         "Demo pending {}".format(suffix),
@@ -1099,33 +1134,58 @@ def seed_demo(db_path: DatabasePath) -> JsonObject:
         {"channel": "sms", "retries": 1},
         [{"name": "Send", "overrides": {}}],
     )
-    # Demo creation must remain reliable even if the queue already contains
-    # older user-created tasks.  Claim this newly-created task by id with the
-    # same atomic transition and ownership invariant as claim-next.
+    # The demo's running task is born already claimed inside one transaction,
+    # so a concurrently polling real worker can never snatch it between
+    # creation and the demo claim.
+    running_steps = [
+        ("Prepare recipients", {"batch": 100}),
+        ("Send messages", {"channel": "push", "batch": ""}),
+        ("Collect receipts", {"retries": 3}),
+    ]
     connection = connect(db_path)
     try:
         connection.execute("BEGIN IMMEDIATE")
         now = utc_now()
         claim_token = secrets.token_urlsafe(32)
-        claimed = connection.execute(
+        cursor = connection.execute(
             """
-            UPDATE tasks
-            SET status = 'claimed', claimed_by = 'demo-worker', claim_token = ?,
-                claimed_at = ?, lease_expires_at = ?, updated_at = ?
-            WHERE id = ? AND status = 'pending'
-                AND claimed_by IS NULL AND claim_token IS NULL
+            INSERT INTO tasks(
+                name, group_id, base_parameters, status, claimed_by,
+                claim_token, claimed_at, lease_expires_at, created_at, updated_at
+            ) VALUES (?, ?, ?, 'claimed', 'demo-worker', ?, ?, ?, ?, ?)
             """,
-            (claim_token, now, _lease_expiry(), now, running["id"]),
+            (
+                "Demo running {}".format(suffix),
+                demo_group["id"],
+                _json_dump({"channel": "sms", "retries": 2, "locale": "zh-CN"}),
+                claim_token,
+                now,
+                _lease_expiry(),
+                now,
+                now,
+            ),
         )
-        if claimed.rowcount != 1:
-            raise ConflictError("demo seed could not claim its running task")
+        running_id = cursor.lastrowid
+        connection.executemany(
+            """
+            INSERT INTO steps(
+                task_id, sequence, name, override_parameters, status
+            ) VALUES (?, ?, ?, ?, 'pending')
+            """,
+            [
+                (running_id, sequence, step_name, _json_dump(overrides))
+                for sequence, (step_name, overrides) in enumerate(
+                    running_steps, start=1
+                )
+            ],
+        )
         _record_operation(
             connection,
-            "claim",
-            "demo-worker 认领演示任务 #{}：与 claim-next 相同的原子事务与凭证机制".format(
-                running["id"]
+            "task_created",
+            "演示任务 #{} 创建并在同一事务内由 demo-worker 认领（原子出生即持有）".format(
+                running_id
             ),
-            task_id=running["id"],
+            task_id=running_id,
             worker_id="demo-worker",
         )
         connection.commit()
@@ -1135,7 +1195,7 @@ def seed_demo(db_path: DatabasePath) -> JsonObject:
         raise
     finally:
         connection.close()
-    running = start_task(db_path, running["id"], "demo-worker", claim_token)
+    running = start_task(db_path, running_id, "demo-worker", claim_token)
     return {
         "group": demo_group,
         "running_task": running,

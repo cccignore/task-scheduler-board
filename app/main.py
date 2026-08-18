@@ -36,6 +36,7 @@ from .services import (
     list_groups,
     list_operation_logs,
     list_tasks,
+    requeue_task,
     reset_all,
     seed_demo,
     start_task,
@@ -211,6 +212,12 @@ def create_app(database_path: Optional[PathLike] = None) -> FastAPI:
     def demo_seed() -> Dict[str, Any]:
         result = seed_demo(selected_database)
         return dict(result, task=result["running_task"])
+
+    @application.post("/api/tasks/{task_id}/requeue")
+    def tasks_requeue(task_id: int) -> Dict[str, Any]:
+        # Operator escape hatch for stuck tasks; deliberately not automatic
+        # because replaying external side effects needs a human decision.
+        return {"task": requeue_task(selected_database, task_id)}
 
     @application.get("/api/logs")
     def logs_index(

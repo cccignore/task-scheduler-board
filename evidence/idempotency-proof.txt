@@ -1,4 +1,4 @@
-Captured: 2026-08-17 (Asia/Shanghai)
+Captured: 2026-08-18 (Asia/Shanghai) — regenerated at the final submitted code state
 Environment: Python 3.9.6; SQLite 3.54.0; macOS arm64
 Command: .venv/bin/python scripts/run_idempotency_proof.py
 
@@ -7,7 +7,7 @@ REAL MULTIPROCESS IDEMPOTENCY PROOF: PASS
   worker processes              : 5
   unique ready process ids      : 5
   verified pre-open connections : 5
-  ready pid/connection records  : 23213/4465349136, 23214/4465054224, 23215/4433220112, 23216/4463727120, 23217/4420489744
+  ready pid/connection records  : 90362/4421353024, 90364/4456906304, 90365/4454284864, 90366/4389387840, 90367/4384980544
   observed completion calls     : 5
   observed result records       : 5
   exact inserted responses      : 1

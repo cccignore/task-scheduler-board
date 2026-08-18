@@ -41,7 +41,7 @@ for each (key, value) in O_i:
 
 ### 崩溃恢复不改变参数语义
 
-任务因租约过期被回收、由新 Worker 续跑时，`G*` 仍是**首次** start 冻结的快照（存储在任务行里，resume 时直接复用，不会重读已变化的组），所有 `E_i` 因输入不变而保持相同。`test_reclaimed_running_task_resumes_from_first_pending_step` 对此有断言。
+任务被回收（未开工的租约自动回收，或已开工任务被操作员手动重派）后由新 Worker 续跑时，`G*` 仍是**首次** start 冻结的快照（存储在任务行里，resume 时直接复用，不会重读已变化的组），所有 `E_i` 因输入不变而保持相同。`test_manual_requeue_rotates_credentials_and_resumes_from_pending_step` 对此有断言。
 
 ## 一个完整的 Step 1 → Step 5 演算
 
